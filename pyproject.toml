@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "DynNexus"
+description = "A Foundation Model for Universal Forecasting of Nonlinear Dynamical Systems with Multi-scale Representations"
+version = "0.1.0"
+readme = "readme.md"
+license = { text = "AGPL-3.0-only" }  # SPDX license identifier
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU Affero General Public License v3.0 (AGPLv3)",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "hydra-core", 
+    "numpy", 
+    "torch", 
+    "transformers", 
+    "accelerate",
+    "dysts", 
+    "gluonts[arrow]", 
+    "scipy", 
+    "scikit-learn", 
+    "tqdm", 
+    "matplotlib",
+    "kymatio",
+]
+
+# Optional dependencies
+[project.optional-dependencies]
+numba = ["numba"]
+flash_attention = ["flash_attn"]
+profile = ["memory_profiler", "psutil"]
+
+# Package data
+[tool.setuptools]
+packages = ["scaleformer", "scaleformer.utils"] 
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "E501"]

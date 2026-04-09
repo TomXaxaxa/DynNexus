@@ -1,0 +1,112 @@
+run_name: null
+
+hydra:
+  output_subdir: .hydra
+  run:
+    dir: ./hydra_runs/${now:%Y-%m-%d}/${run_name}
+
+train_data_dirs: [./data/train]
+probability: null
+shuffle_buffer_length: 100000
+min_past: 60
+max_missing_prop: 0.9
+fixed_dim: 3
+
+augmentations:
+  augmentation_rate: 0.2
+  probabilities: [1.0, 1.0, 1.0, 0.0, 0.0]
+  dim_range: [3, 8]
+  lag_range: [1, 10]
+  phase_surrogate_cutoff: 1.0
+  mode_range: [5, 15]
+  max_wavenumber: 10.0
+  max_amp: 10.0
+
+train:
+  seed: 99
+  max_steps: 100000
+  save_steps: 10000
+  log_steps: 100
+  resume_from_checkpoint: null
+  per_device_train_batch_size: 1024
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  dataloader_num_workers: 16
+  dataloader_prefetch_factor: 2
+  tf32: true
+  bf16: true
+  torch_compile: false
+  optim: adamw_torch_fused
+  learning_rate: 1e-3
+  weight_decay: 0.0
+  output_dir: ./checkpoints/
+  ddp_backend: nccl
+  ddp_find_unused_parameters: false
+  remove_unused_columns: false
+
+scaleformer:
+  context_length: 512
+  prediction_length: 128
+  loss: mse
+  huber_delta: 1.0
+  patch_length: 8
+  patch_stride: 8
+  d_model: 48
+  channel_attention: true
+  norm_type: rmsnorm
+  norm_eps: 1e-05
+  attention_dropout: 0.0
+  path_dropout: 0.0
+  ff_dropout: 0.0
+  bias: true
+  activation_function: gelu
+  pre_norm: true
+  head_dropout: 0.0
+  num_parallel_samples: 100
+  use_dynamics_embedding: true
+  num_poly_feats: 8
+  poly_degrees: 2
+  rff_trainable: false
+  rff_scale: 1.0
+  num_rff: 24
+  channel_rope: false
+  max_wavelength: 500
+  rope_percent: 0.75
+  training_truncate_lengths: [512]
+  inference_truncate_length: 512
+  depths: [2, 2, 2, 2]
+  skip_connections_depths: [2, 2, 2, 0]
+  num_heads_list: [3, 6, 12, 24]
+  use_moe: true
+  moe_num_experts: 8
+  moe_top_k: 2
+  load_balance_coeff: 0.1
+  mmd_loss_coeff: 0.5
+  mmd_rational_quadratic_sigma_list: [0.2, 0.5, 0.9, 1.3]
+  wavelet_feature_dim: 48
+  wavelet_scattering_j: 8
+  wavelet_scattering_q: 8
+  pretrained_pft_path: null
+
+eval:
+  data_paths_lst: null
+  checkpoint_path: null
+  device: cuda:0
+  torch_dtype: float32
+  batch_size: 32
+  num_subdirs: null
+  num_samples_per_subdir: null
+  sliding_context: true
+  save_eval_artifacts: false
+  metric_names:
+    [mse, mae, smape, spearman, ME-LRw, max_lyap_gt, max_lyap_pred, kld, gd_rmse]
+  results_dir: ./eval_results/
+  metrics_fname: metrics
+  overwrite: false
+  parallel_sample_reduction: mean
+  prediction_length: 64
+  num_test_instances: 1
+  window_style: sampled
+  window_stride: 1024
+  split_coords: false
+  verbose: false
