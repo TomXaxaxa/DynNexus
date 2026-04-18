@@ -228,6 +228,10 @@ class NaiveMoE(nn.Module):
                 expert_input = perm_inputs[start:end]
                 expert_output = self.experts[i](expert_input)
                 perm_outputs[start:end] = expert_output
+            else:
+                dummy_input = torch.zeros((1, self.d_model), dtype=x_reshaped.dtype, device=x.device)
+                dummy_output = self.experts[i](dummy_input)
+                load_balance_loss = load_balance_loss + dummy_output.sum() * 0.0
         inv_perm = torch.argsort(perm)
         unperm_outputs = perm_outputs[inv_perm]
         unperm_outputs = unperm_outputs * top_k_weights.flatten().unsqueeze(-1)
@@ -902,14 +906,25 @@ class PatchTSTForPrediction(PatchTSTPreTrainedModel):
             )
         }
         self.wavelet_feature_dim = int(getattr(config, "wavelet_feature_dim", 48))
-        wavelet_scattering_j = int(getattr(config, "wavelet_scattering_j", 8))
-        wavelet_scattering_q = int(getattr(config, "wavelet_scattering_q", 8))
-        self.freq_analyzer = WaveletAnalyzer(
-            input_timesteps=config.context_length,
-            feature_dim=self.wavelet_feature_dim,
-            J=wavelet_scattering_j,
-            Q=wavelet_scattering_q,
-        )
+        if self.wavelet_feature_dim < 0:
+            raise ValueError("`wavelet_feature_dim` must be >= 0.")
+        self.training_target = str(getattr(config, "training_target", "value")).lower()
+        if self.training_target not in {"value", "delta"}:
+            raise ValueError(
+                f"Unsupported training_target: {self.training_target}. "
+                "Expected one of ['value', 'delta']."
+            )
+        if self.wavelet_feature_dim > 0:
+            wavelet_scattering_j = int(getattr(config, "wavelet_scattering_j", 8))
+            wavelet_scattering_q = int(getattr(config, "wavelet_scattering_q", 8))
+            self.freq_analyzer = WaveletAnalyzer(
+                input_timesteps=config.context_length,
+                feature_dim=self.wavelet_feature_dim,
+                J=wavelet_scattering_j,
+                Q=wavelet_scattering_q,
+            )
+        else:
+            self.freq_analyzer = None
         self.scaler = PatchTSTScaler(config)
         self.patchifier = PatchTSTPatchify(config)
         if config.use_dynamics_embedding:
@@ -967,15 +982,17 @@ class PatchTSTForPrediction(PatchTSTPreTrainedModel):
         past_values_truncated = past_values[:, -target_len:, :]
         past_observed_mask_truncated = past_observed_mask[:, -target_len:, :]
 
-        wavelet_input_truncated = past_values[:, -target_len:, :].permute(0, 2, 1)
-        padding_needed = self.config.context_length - wavelet_input_truncated.shape[2]
-        if padding_needed > 0:
-            wavelet_input_padded = F.pad(
-                wavelet_input_truncated, (0, padding_needed), "constant", 0
-            )
-        else:
-            wavelet_input_padded = wavelet_input_truncated
-        wavelet_embedding = self.freq_analyzer(wavelet_input_padded)
+        wavelet_embedding = None
+        if self.freq_analyzer is not None:
+            wavelet_input_truncated = past_values[:, -target_len:, :].permute(0, 2, 1)
+            padding_needed = self.config.context_length - wavelet_input_truncated.shape[2]
+            if padding_needed > 0:
+                wavelet_input_padded = F.pad(
+                    wavelet_input_truncated, (0, padding_needed), "constant", 0
+                )
+            else:
+                wavelet_input_padded = wavelet_input_truncated
+            wavelet_embedding = self.freq_analyzer(wavelet_input_padded)
         scaled_past_values, loc, scale = self.scaler(
             past_values_truncated, past_observed_mask_truncated
         )
@@ -995,18 +1012,48 @@ class PatchTSTForPrediction(PatchTSTPreTrainedModel):
             linear_attn=linear_attn,
         )
         y_hat = self.head(decoder_outputs_list, wavelet_embedding=wavelet_embedding)
-        y_hat_out = y_hat * scale + loc
+
+        last_past_value = past_values_truncated[:, -1:, :]
+        delta_rms = torch.ones_like(last_past_value)
+
+        if self.training_target == "delta":
+            if past_values_truncated.shape[1] > 1:
+                past_deltas = (
+                    past_values_truncated[:, 1:, :] - past_values_truncated[:, :-1, :]
+                )
+                delta_rms = torch.sqrt(
+                    torch.mean(past_deltas**2, dim=1, keepdim=True)
+                ).clamp_min(1e-6)
+            y_hat_out = last_past_value + y_hat * delta_rms
+        else:
+            y_hat_out = y_hat * scale + loc
+
         loss_val = None
         if future_values is not None:
-            prediction_loss = self.loss(y_hat_out, future_values)
+            if self.training_target == "delta":
+                prediction_targets = (future_values - last_past_value) / delta_rms
+                prediction_outputs = y_hat
+            else:
+                prediction_targets = future_values
+                prediction_outputs = y_hat_out
+
+            prediction_loss = self.loss(prediction_outputs, prediction_targets)
             mmd_loss = torch.tensor(0.0, device=past_values.device)
             if self.mmd_loss_coeff > 0:
-                batch_mean = loc.mean(dim=0)
-                batch_variance = (scale**2).mean(dim=0)
+                if self.training_target == "delta":
+                    batch_mean = torch.zeros(
+                        prediction_targets.shape[-1], device=past_values.device
+                    )
+                    batch_variance = torch.ones(
+                        prediction_targets.shape[-1], device=past_values.device
+                    )
+                else:
+                    batch_mean = loc.mean(dim=0)
+                    batch_variance = (scale**2).mean(dim=0)
                 mmd_loss = conditional_mmd_multi_step(
                     input_traj=None,
-                    true_traj=future_values,
-                    pred_traj=y_hat_out,
+                    true_traj=prediction_targets,
+                    pred_traj=prediction_outputs,
                     mean=batch_mean,
                     variance=batch_variance,
                     kernel_params=self.mmd_kernel_params,

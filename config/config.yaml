@@ -47,6 +47,7 @@ train:
 scaleformer:
   context_length: 512
   prediction_length: 128
+  training_target: value
   loss: mse
   huber_delta: 1.0
   patch_length: 8

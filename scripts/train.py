@@ -38,6 +38,7 @@ from transformers import (
 import torch._dynamo
 
 torch._dynamo.config.cache_size_limit = 256
+torch._logging.set_logs(dynamo=logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
