@@ -46,7 +46,6 @@ logs/
 **/plots*
 **/logs*
 **/outputs*
-**/metrics*
 **/eval_results*
 **/checkpoints*
 **/excluded_notebooks
